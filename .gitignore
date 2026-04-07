@@ -1,0 +1,20 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+
+# Environment
+.env
+
+# Agent data (seen-state and output)
+data/seen/
+output/
+
+# OS
+.DS_Store
+Thumbs.db
