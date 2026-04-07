@@ -3,26 +3,34 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import threading
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from .models import Listing
 
 
 SYSTEM_PROMPT_DE = """
-Du bist ein Wohnungs-Scout-Agent für Innsbruck.
+Du bist ein Wohnungs-Scout-Agent fuer Innsbruck.
+
 Aufgabe:
-- Prüfe eine einzelne Wohnungsanzeige (Detailseite) streng nach diesen Regeln.
-- Nur Wohnungen in Innsbruck (und wirklich nur Innsbruck).
+Pruefe den folgenden Seitentext. Falls es sich NICHT um eine einzelne Wohnungsanzeige handelt
+(z. B. Kategorieseite, Uebersichtsseite, Fehlerseite, Login-Seite), antworte sofort mit:
+{"is_relevant": false, "title": "Keine Anzeige", "reason": "Keine einzelne Wohnungsanzeige", "rent_eur": null, "rooms": null, "size_m2": null, "has_balcony_or_garden": null, "district": null}
+
+Falls es eine einzelne Wohnungsanzeige ist, pruefe sie streng nach diesen Kriterien:
+- Nur Wohnungen in Innsbruck (wirklich nur Innsbruck, kein Umland).
 - 2 oder 3 Zimmer.
 - Miete unter 1300 Euro pro Monat.
 - Muss Balkon ODER Garten haben.
-- Mindestens 45 m².
+- Mindestens 45 m2.
 
-Gib NUR valides JSON zurück (ohne Markdown), exakt in diesem Schema:
+Gib NUR valides JSON zurueck (kein Markdown, keine Erklaerungen), exakt in diesem Schema:
 {
   "is_relevant": true/false,
   "title": "...",
-  "reason": "kurze Begründung auf Deutsch",
+  "reason": "kurze Begruendung auf Deutsch warum passend oder nicht",
   "rent_eur": number|null,
   "rooms": number|null,
   "size_m2": number|null,
@@ -53,15 +61,20 @@ def evaluate_listing_with_gemini(
     site: str,
     listing_url: str,
     listing_text: str,
+    line_callback: Callable[[str], None] | None = None,
+    stop_event: threading.Event | None = None,
 ) -> GeminiResult:
     user_prompt = (
         f"Website: {site}\n"
         f"Listing-URL: {listing_url}\n\n"
-        "Prüfe diese Anzeige nach den Kriterien und liefere das JSON:\n\n"
+        "Pruefe diese Seite nach den Kriterien und liefere das JSON:\n\n"
         f"{listing_text[:12000]}"
     )
 
-    raw = _run_gemini(gemini_cmd, SYSTEM_PROMPT_DE, user_prompt)
+    raw = _run_gemini(
+        gemini_cmd, SYSTEM_PROMPT_DE, user_prompt,
+        line_callback=line_callback, stop_event=stop_event,
+    )
     payload = _extract_json(raw)
 
     return GeminiResult(
@@ -90,37 +103,135 @@ def to_listing(site: str, url: str, result: GeminiResult) -> Listing:
     )
 
 
-def _run_gemini(gemini_cmd: str, system_prompt: str, user_prompt: str) -> str:
+def _deliver_lines(text: str, callback: Callable[[str], None] | None) -> None:
+    if callback is None:
+        return
+    for line in text.splitlines():
+        if line.strip():
+            callback(line)
+
+
+class _Timeout(Exception):
+    """Internal: raised when the Gemini CLI exceeds its timeout."""
+
+
+def _popen_with_poll(
+    cmd: list[str],
+    stdin_text: str | None,
+    timeout: float,
+    stop_event: threading.Event | None,
+) -> str:
+    """
+    Run *cmd* and return its stdout.  Polls every 0.2 s so that both a
+    stop_event (Ctrl+C) and a timeout can kill the child process promptly.
+    Raises _Timeout on timeout, GeminiError on non-zero exit without output.
+    """
+    import os
+    import signal
+
+    proc = subprocess.Popen(
+        cmd,
+        stdin=subprocess.PIPE if stdin_text is not None else subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    if stdin_text is not None:
+        try:
+            proc.stdin.write(stdin_text)  # type: ignore[union-attr]
+            proc.stdin.close()            # type: ignore[union-attr]
+        except BrokenPipeError:
+            pass
+
+    deadline = time.monotonic() + timeout
+    try:
+        while True:
+            # Check stop flag (Ctrl+C)
+            if stop_event is not None and stop_event.is_set():
+                proc.kill()
+                proc.wait()
+                raise GeminiError("Abgebrochen (Ctrl+C).")
+
+            # Check timeout
+            if time.monotonic() > deadline:
+                proc.kill()
+                proc.wait()
+                raise _Timeout()
+
+            rc = proc.poll()
+            if rc is not None:
+                stdout = (proc.stdout.read() if proc.stdout else "").strip()  # type: ignore
+                stderr = (proc.stderr.read() if proc.stderr else "").strip()  # type: ignore
+                if rc != 0 and not stdout:
+                    raise GeminiError(
+                        f"Gemini CLI Fehler (exit {rc}): {stderr[:500]}"
+                    )
+                return stdout
+
+            time.sleep(0.2)
+    except GeminiError:
+        raise
+    except _Timeout:
+        raise
+    except Exception as exc:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        raise GeminiError(f"Fehler beim Ausfuehren des Gemini CLI: {exc}") from exc
+
+
+def _run_gemini(
+    gemini_cmd: str,
+    system_prompt: str,
+    user_prompt: str,
+    line_callback: Callable[[str], None] | None = None,
+    stop_event: threading.Event | None = None,
+) -> str:
     full_prompt = f"SYSTEM:\n{system_prompt}\n\nUSER:\n{user_prompt}"
 
-    attempts = [
-        [gemini_cmd, "-p", full_prompt],
-        [gemini_cmd, "--prompt", full_prompt],
-        [gemini_cmd],
-    ]
+    # Attempt 1: -p flag (used by @google/gemini-cli)
+    try:
+        output = _popen_with_poll(
+            [gemini_cmd, "-p", full_prompt],
+            stdin_text=None,
+            timeout=90,
+            stop_event=stop_event,
+        )
+        if output:
+            _deliver_lines(output, line_callback)
+            return output
+    except FileNotFoundError as exc:
+        raise GeminiError(
+            f"Gemini CLI nicht gefunden: '{gemini_cmd}'. Bitte Installation/Path pruefen."
+        ) from exc
+    except _Timeout:
+        pass  # fall through to stdin attempt
+    except GeminiError:
+        raise
 
-    for command in attempts:
-        try:
-            use_stdin = len(command) == 1
-            proc = subprocess.run(
-                command,
-                input=full_prompt if use_stdin else None,
-                capture_output=True,
-                text=True,
-                timeout=120,
-                check=False,
-            )
-            output = (proc.stdout or "").strip() or (proc.stderr or "").strip()
-            if proc.returncode == 0 and output:
-                return output
-        except FileNotFoundError as exc:
-            raise GeminiError(
-                f"Gemini CLI nicht gefunden: '{gemini_cmd}'. Bitte Installation/Path prüfen."
-            ) from exc
-        except Exception:
-            continue
+    # Attempt 2: stdin piping
+    try:
+        output = _popen_with_poll(
+            [gemini_cmd],
+            stdin_text=full_prompt,
+            timeout=90,
+            stop_event=stop_event,
+        )
+        if output:
+            _deliver_lines(output, line_callback)
+            return output
+    except _Timeout:
+        raise GeminiError(
+            "Gemini CLI Timeout (90s). Bitte API-Key und Netzwerkverbindung pruefen."
+        )
+    except GeminiError:
+        raise
+    except Exception as exc:
+        raise GeminiError(f"Gemini CLI Fehler: {exc}") from exc
 
-    raise GeminiError("Gemini CLI konnte keine verwertbare Antwort liefern.")
+    raise GeminiError("Gemini CLI lieferte keine verwertbare Ausgabe.")
 
 
 def _extract_json(raw: str) -> dict:
@@ -137,7 +248,7 @@ def _extract_json(raw: str) -> dict:
     if brace_match:
         return json.loads(brace_match.group(0))
 
-    raise GeminiError("Gemini-Antwort enthält kein parsebares JSON.")
+    raise GeminiError("Gemini-Antwort enthaelt kein parsebares JSON.")
 
 
 def _to_float(value) -> float | None:
