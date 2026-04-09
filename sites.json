@@ -1,6 +1,6 @@
 [
-  "https://wohnen.oehweb.at/erweiterte-suche/?filter_search_type%5B%5D=wohnung&advanced_city=innsbruck&advanced_area=&min-anzahl-mc2b2=&price_low=0&price_max=1299&submit=SUCHEN&wpestate_regular_search_nonce=dbe2949928&_wp_http_referer=%2F",
-  "https://immo.tt.com/mietobjekt/wohnung/tirol/innsbruck-stadt/innsbruck?f%5Bprice%23t%7Cprice_t%40g%5D=1500&f%5Bprice%23v%7Cprice_t%40g%5D=false&f%5Bno_of_rooms%40f%5D=2",
-  "https://www.immobilienscout24.at/regional/tirol/innsbruck/wohnung-mieten?numberOfRoomsFrom=2&primaryPriceTo=1300",
-  "https://www.willhaben.at/iad/immobilien/mietwohnungen/tirol/innsbruck/"
+    "https://www.willhaben.at/iad/immobilien/mietwohnungen/mietwohnung-angebote?sfId=d76335b8-fbdb-48a9-af23-22092d6c2388&parent_areaid=7&areaId=701&rows=30&isNavigation=true&NO_OF_ROOMS_BUCKET=2X2&NO_OF_ROOMS_BUCKET=3X3&NO_OF_ROOMS_BUCKET=4X4&page=1&PRICE_TO=1300&ESTATE_SIZE/LIVING_AREA_FROM=45",
+    "https://www.immobilienscout24.at/regional/tirol/innsbruck/wohnung-mieten?numberOfRoomsFrom=2&primaryAreaFrom=45&primaryPriceTo=1300",
+    "https://immo.tt.com/mietobjekt/wohnung/tirol/innsbruck-stadt/innsbruck?f%5Bprice%23t%7Cprice_t%40g%5D=1500&f%5Bprice%23v%7Cprice_t%40g%5D=false&f%5Bno_of_rooms%40f%5D=2&f%5Bliving%40f%5D=45",
+    "https://wohnen.oehweb.at/erweiterte-suche/?filter_search_type%5B%5D=wohnung&advanced_city=innsbruck&advanced_area=&min-anzahl-mc2b2=45&price_low=0&price_max=1302&submit=SUCHEN&wpestate_regular_search_nonce=28a6a5be5e&_wp_http_referer=%2F"
 ]

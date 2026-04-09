@@ -6,7 +6,8 @@ from pathlib import Path
 from .models import Listing
 
 
-def write_html_report(listings: list[Listing], output_path: Path) -> None:
+def build_html_report(listings: list[Listing]) -> str:
+    """Build and return the full HTML report string."""
     generated_at = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
 
     rows = ""
@@ -37,7 +38,7 @@ def write_html_report(listings: list[Listing], output_path: Path) -> None:
     else:
         rows = '<tr><td colspan="8" class="center">Keine neuen passenden Wohnungen gefunden.</td></tr>'
 
-    html = f"""<!DOCTYPE html>
+    return f"""<!DOCTYPE html>
 <html lang="de">
 <head>
   <meta charset="UTF-8">
@@ -100,5 +101,13 @@ def write_html_report(listings: list[Listing], output_path: Path) -> None:
 </html>
 """
 
+
+def write_html_report(
+    listings: list[Listing],
+    output_path: Path,
+    prebuilt_html: str = "",
+) -> None:
+    """Write the HTML report to *output_path*. Uses *prebuilt_html* if provided."""
+    html = prebuilt_html or build_html_report(listings)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(html, encoding="utf-8")

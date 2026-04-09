@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import smtplib
-from email.message import EmailMessage
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 
 from .config import MailConfig
 from .models import Listing
@@ -14,26 +15,30 @@ class EmailError(RuntimeError):
 def send_result_email(
     mail: MailConfig,
     listings: list[Listing],
+    html_body: str,
     dry_run: bool = False,
 ) -> None:
-    subject = "Wohnungsagent: Neue passende Inserate"
-    body = _build_mail_body(listings)
+    subject = f"Wohnungsagent: {len(listings)} neue passende Inserate" if listings else "Wohnungsagent: Keine neuen Inserate"
+    plain_body = _build_plain_body(listings)
 
     if dry_run:
         print("[DRY_RUN] E-Mail Versand übersprungen.")
         print("Betreff:", subject)
-        print(body)
+        print(plain_body)
         return
 
     required = [mail.host, str(mail.port), mail.user, mail.password, mail.sender, mail.recipient]
     if not all(required):
         raise EmailError("SMTP-Konfiguration unvollständig. Bitte .env prüfen.")
 
-    msg = EmailMessage()
+    msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["From"] = mail.sender
     msg["To"] = mail.recipient
-    msg.set_content(body)
+
+    # Plain text first, HTML second (clients prefer the last part they support)
+    msg.attach(MIMEText(plain_body, "plain", "utf-8"))
+    msg.attach(MIMEText(html_body, "html", "utf-8"))
 
     try:
         with smtplib.SMTP(mail.host, mail.port, timeout=30) as server:
@@ -44,7 +49,7 @@ def send_result_email(
         raise EmailError(f"E-Mail konnte nicht gesendet werden: {exc}") from exc
 
 
-def _build_mail_body(listings: list[Listing]) -> str:
+def _build_plain_body(listings: list[Listing]) -> str:
     if not listings:
         return (
             "Hallo Timmy,\n\n"
@@ -85,4 +90,6 @@ def _build_mail_body(listings: list[Listing]) -> str:
         )
 
     lines.extend(["Viele Grüße", "Wohnungsagent"])
+    return "\n".join(lines)
+
     return "\n".join(lines)

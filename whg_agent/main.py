@@ -15,7 +15,7 @@ from .config import load_config
 from .emailer import send_result_email
 from .gemini_agent import GeminiError, evaluate_listing_with_gemini, to_listing
 from .models import AgentResult, Listing
-from .reporter import write_html_report
+from .reporter import build_html_report, write_html_report
 from .scraper import WebFetchError, extract_listing_links, fetch_html, listing_page_text
 from .storage import load_seen_state, save_seen_state, state_file_for_site
 
@@ -324,17 +324,28 @@ def run() -> int:
         finally:
             executor.shutdown(wait=False)
 
+    # Always build the HTML report
+    html_report = ""
+    try:
+        html_report = build_html_report(all_relevant)
+    except Exception:
+        pass  # HTML build failure should not block further steps
+
+    # Always save the HTML file first, regardless of --email or --file
+    fallback_path = project_root / (args.file if use_file_output else "output/results.html")
+    write_html_report(all_relevant, fallback_path, prebuilt_html=html_report)
+    print(
+        f"\n✔ HTML-Bericht gespeichert: {fallback_path}"
+    )
+
     if use_file_output:
-        output_path = project_root / args.file
-        write_html_report(all_relevant, output_path)
         print(
-            f"\n✔ Fertig. {len(all_relevant)} passende neue Listing(s). "
-            f"HTML-Bericht: {output_path}"
+            f"✔ Fertig. {len(all_relevant)} passende neue Listing(s)."
         )
     else:
-        send_result_email(config.mail, all_relevant, dry_run=dry_run)
+        send_result_email(config.mail, all_relevant, html_body=html_report, dry_run=dry_run)
         print(
-            f"\n✔ Fertig. {len(all_relevant)} passende neue Listing(s). "
+            f"✔ Fertig. {len(all_relevant)} passende neue Listing(s). "
             f"E-Mail gesendet an {config.mail.recipient}."
         )
     return 0
