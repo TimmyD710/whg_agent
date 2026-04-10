@@ -24,7 +24,7 @@ class AppConfig:
     sites: List[str]
     data_dir: Path
     seen_dir: Path
-    gemini_cmd: str
+    copilot_model: str
     dry_run: bool
     mail: MailConfig
 
@@ -63,7 +63,7 @@ def load_config(project_root: Path) -> AppConfig:
         sites=sites,
         data_dir=data_dir,
         seen_dir=seen_dir,
-        gemini_cmd=os.getenv("GEMINI_CMD", "gemini"),
+        copilot_model=os.getenv("COPILOT_MODEL", "gpt-4o-mini"),
         dry_run=_to_bool(os.getenv("DRY_RUN"), False),
         mail=mail,
     )

@@ -84,12 +84,10 @@ def _build_plain_body(listings: list[Listing]) -> str:
                         else "unbekannt"
                     )
                 ),
-                f"   Grund: {listing.reason or 'Erfüllt Kriterien laut Agent'}",
+                f"   Inseriert am: {listing.listed_at or 'unbekannt'}",
                 "",
             ]
         )
 
     lines.extend(["Viele Grüße", "Wohnungsagent"])
-    return "\n".join(lines)
-
     return "\n".join(lines)

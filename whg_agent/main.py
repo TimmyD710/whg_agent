@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
+import json
 import os
 import subprocess
 import sys
@@ -19,7 +21,25 @@ from .reporter import build_html_report, write_html_report
 from .scraper import WebFetchError, extract_listing_links, fetch_html, listing_page_text
 from .storage import load_seen_state, save_seen_state, state_file_for_site
 
+_RESULTS_JSON = "output/results.json"
+
 _PRINT_LOCK = threading.Lock()
+
+
+def _save_results_json(listings: list[Listing], project_root: Path) -> Path:
+    path = project_root / _RESULTS_JSON
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = [dataclasses.asdict(l) for l in listings]
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path
+
+
+def _load_results_json(project_root: Path) -> list[Listing]:
+    path = project_root / _RESULTS_JSON
+    if not path.exists():
+        raise FileNotFoundError(f"Keine gespeicherten Ergebnisse gefunden unter: {path}")
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    return [Listing(**entry) for entry in raw]
 
 
 def _site_label(url: str) -> str:
@@ -46,7 +66,7 @@ class AgentLogger:
 def run_agent_for_site(
     site: str,
     project_root: Path,
-    gemini_cmd: str,
+    copilot_model: str,
     logger: AgentLogger | None = None,
     stop_event: threading.Event | None = None,
 ) -> AgentResult:
@@ -79,14 +99,14 @@ def run_agent_for_site(
             try:
                 log.log(f"[{i}/{len(unseen_links)}] Lade Detailseite …")
                 detail_text = listing_page_text(link)
-                log.log(f"[{i}/{len(unseen_links)}] Frage Gemini …")
+                log.log(f"[{i}/{len(unseen_links)}] Frage Copilot …")
                 result = evaluate_listing_with_gemini(
-                    gemini_cmd=gemini_cmd,
+                    copilot_model=copilot_model,
                     site=site,
                     listing_url=link,
                     listing_text=detail_text,
                     line_callback=lambda line, _i=i, _n=len(unseen_links): (
-                        log.log(f"[{_i}/{_n}]   gemini \u25b8 {line}") if line.strip() else None
+                        log.log(f"[{_i}/{_n}]   copilot \u25b8 {line}") if line.strip() else None
                     ),
                     stop_event=stop_event,
                 )
@@ -96,9 +116,6 @@ def run_agent_for_site(
 
                 verdict = "✅ PASSEND" if result.is_relevant else "❌ nicht passend"
                 log.log(f"[{i}/{len(unseen_links)}] {verdict}: {result.title}")
-                if result.reason:
-                    log.log(f"[{i}/{len(unseen_links)}]   Grund: {result.reason}")
-
                 if result.is_relevant:
                     relevant.append(to_listing(site=site, url=link, result=result))
 
@@ -215,6 +232,12 @@ def _parse_args() -> argparse.Namespace:
         help="Ergebnisse als HTML-Datei mit klickbaren Links speichern (Standard: output/results.html).",
     )
     parser.add_argument(
+        "--render",
+        action="store_true",
+        default=False,
+        help="HTML/E-Mail aus den zuletzt gespeicherten Ergebnissen neu erstellen, ohne Agenten zu starten.",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         default=False,
@@ -258,6 +281,23 @@ def run() -> int:
     use_file_output = args.file is not None
     dry_run = args.dry_run or config.dry_run
 
+    # --render: skip agents, load last saved results
+    if args.render:
+        try:
+            all_relevant = _load_results_json(project_root)
+        except FileNotFoundError as exc:
+            print(f"❌ {exc}")
+            return 1
+        print(f"✔ {len(all_relevant)} Ergebnis(se) aus gespeicherter JSON geladen.")
+        html_report = build_html_report(all_relevant, sites=config.sites)
+        fallback_path = project_root / (args.file if use_file_output else "output/results.html")
+        write_html_report(all_relevant, fallback_path, prebuilt_html=html_report)
+        print(f"✔ HTML-Bericht gespeichert: {fallback_path}")
+        if not use_file_output:
+            send_result_email(config.mail, all_relevant, html_body=html_report, dry_run=dry_run)
+            print(f"✔ E-Mail gesendet an {config.mail.recipient}.")
+        return 0
+
     # --tmux: each agent gets its own terminal pane
     if args.tmux:
         extra: list[str] = []
@@ -283,7 +323,7 @@ def run() -> int:
         log = AgentLogger(sites_to_run[0])
         try:
             result = run_agent_for_site(
-                sites_to_run[0], project_root, config.gemini_cmd, log, stop_event
+                sites_to_run[0], project_root, config.copilot_model, log, stop_event
             )
         except KeyboardInterrupt:
             print("\n⛔ Abbruch durch Ctrl+C.")
@@ -302,7 +342,7 @@ def run() -> int:
                 run_agent_for_site,
                 site,
                 project_root,
-                config.gemini_cmd,
+                config.copilot_model,
                 AgentLogger(site),
                 stop_event,
             ): site
@@ -327,9 +367,16 @@ def run() -> int:
     # Always build the HTML report
     html_report = ""
     try:
-        html_report = build_html_report(all_relevant)
+        html_report = build_html_report(all_relevant, sites=config.sites)
     except Exception:
         pass  # HTML build failure should not block further steps
+
+    # Save raw results to JSON for later re-rendering
+    try:
+        json_path = _save_results_json(all_relevant, project_root)
+        print(f"\n✔ Ergebnisse als JSON gespeichert: {json_path}")
+    except Exception as exc:
+        print(f"⚠️  JSON-Speicherung fehlgeschlagen: {exc}")
 
     # Always save the HTML file first, regardless of --email or --file
     fallback_path = project_root / (args.file if use_file_output else "output/results.html")

@@ -10,12 +10,12 @@ class Listing:
     title: str
     url: str
     source_site: str
-    reason: str = ""
     rent_eur: float | None = None
     rooms: float | None = None
     size_m2: float | None = None
     has_balcony_or_garden: bool | None = None
     district: str | None = None
+    listed_at: str | None = None
     raw: dict[str, Any] = field(default_factory=dict)
 
 

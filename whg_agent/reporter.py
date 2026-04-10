@@ -6,13 +6,14 @@ from pathlib import Path
 from .models import Listing
 
 
-def build_html_report(listings: list[Listing]) -> str:
+def build_html_report(listings: list[Listing], sites: list[str] | None = None) -> str:
     """Build and return the full HTML report string."""
     generated_at = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
+    site_index = {url: i + 1 for i, url in enumerate(sites)} if sites else {}
 
     rows = ""
     if listings:
-        for listing in listings:
+        for i, listing in enumerate(listings, start=1):
             balcony = (
                 "✅" if listing.has_balcony_or_garden is True
                 else "❌" if listing.has_balcony_or_garden is False
@@ -22,7 +23,7 @@ def build_html_report(listings: list[Listing]) -> str:
             rooms = str(listing.rooms) if listing.rooms is not None else "–"
             size = f"{listing.size_m2:.0f} m²" if listing.size_m2 is not None else "–"
             district = listing.district or "–"
-            reason = listing.reason or "Passt laut Agent."
+            listed_at = listing.listed_at or "–"
 
             rows += f"""
             <tr>
@@ -32,8 +33,8 @@ def build_html_report(listings: list[Listing]) -> str:
                 <td>{size}</td>
                 <td class="center">{balcony}</td>
                 <td>{district}</td>
-                <td class="source">{listing.source_site}</td>
-                <td class="reason">{reason}</td>
+                <td>{listed_at}</td>
+                <td class="source"><a href="{listing.url}" target="_blank" rel="noopener">Quelle {site_index.get(listing.source_site, i)}</a></td>
             </tr>"""
     else:
         rows = '<tr><td colspan="8" class="center">Keine neuen passenden Wohnungen gefunden.</td></tr>'
@@ -72,7 +73,6 @@ def build_html_report(listings: list[Listing]) -> str:
     a:hover {{ text-decoration: underline; }}
     .center {{ text-align: center; }}
     .source {{ color: #555; font-size: 0.8em; word-break: break-all; }}
-    .reason {{ color: #444; font-size: 0.85em; max-width: 300px; }}
   </style>
 </head>
 <body>
@@ -81,6 +81,8 @@ def build_html_report(listings: list[Listing]) -> str:
     Generiert am <strong>{generated_at}</strong> &nbsp;|&nbsp;
     <span class="count">{len(listings)}</span> neue passende Wohnung(en) gefunden
   </p>
+  <p>Hallo Timmy,</p>
+  <p>folgende neue passende Wohnungen wurden gefunden:</p>
   <table>
     <thead>
       <tr>
@@ -90,13 +92,14 @@ def build_html_report(listings: list[Listing]) -> str:
         <th>Fläche</th>
         <th>Balkon/Garten</th>
         <th>Bezirk</th>
+        <th>Inseriert am</th>
         <th>Quelle</th>
-        <th>Begründung</th>
       </tr>
     </thead>
     <tbody>{rows}
     </tbody>
   </table>
+  <p>Viele Grüße<br>Wohnungsagent</p>
 </body>
 </html>
 """

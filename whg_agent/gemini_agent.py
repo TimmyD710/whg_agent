@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import random
 import re
 import subprocess
 import threading
@@ -8,8 +9,9 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from .models import Listing
+import requests
 
+from .models import Listing
 
 SYSTEM_PROMPT_DE = """
 Du bist ein Wohnungs-Scout-Agent fuer Innsbruck.
@@ -17,7 +19,7 @@ Du bist ein Wohnungs-Scout-Agent fuer Innsbruck.
 Aufgabe:
 Pruefe den folgenden Seitentext. Falls es sich NICHT um eine einzelne Wohnungsanzeige handelt
 (z. B. Kategorieseite, Uebersichtsseite, Fehlerseite, Login-Seite), antworte sofort mit:
-{"is_relevant": false, "title": "Keine Anzeige", "reason": "Keine einzelne Wohnungsanzeige", "rent_eur": null, "rooms": null, "size_m2": null, "has_balcony_or_garden": null, "district": null}
+{"is_relevant": false, "title": "Keine Anzeige", "rent_eur": null, "rooms": null, "size_m2": null, "has_balcony_or_garden": null, "district": null, "listed_at": null}
 
 Falls es eine einzelne Wohnungsanzeige ist, pruefe sie streng nach diesen Kriterien:
 - Nur Wohnungen in Innsbruck (wirklich nur Innsbruck, kein Umland).
@@ -30,40 +32,90 @@ Gib NUR valides JSON zurueck (kein Markdown, keine Erklaerungen), exakt in diese
 {
   "is_relevant": true/false,
   "title": "...",
-  "reason": "kurze Begruendung auf Deutsch warum passend oder nicht",
   "rent_eur": number|null,
   "rooms": number|null,
   "size_m2": number|null,
   "has_balcony_or_garden": true/false/null,
-  "district": "..."|null
+  "district": "..."|null,
+  "listed_at": "TT.MM.JJJJ HH:MM"|null
 }
 """.strip()
+
+_COPILOT_API_URL = "https://api.githubcopilot.com/chat/completions"
+_COPILOT_TOKEN_URL = "https://api.github.com/copilot_internal/v2/token"
+_TOKEN_CACHE: dict[str, str] = {}
+_TOKEN_EXPIRY: dict[str, float] = {}
+_TOKEN_LOCK = threading.Lock()
+# Global rate limiter: enforces a minimum interval between any two API calls
+_RATE_LOCK = threading.Lock()
+_LAST_CALL_TIME: float = 0.0
+_MIN_CALL_INTERVAL: float = 2.0  # seconds
 
 
 @dataclass
 class GeminiResult:
     is_relevant: bool
     title: str
-    reason: str
     rent_eur: float | None
     rooms: float | None
     size_m2: float | None
     has_balcony_or_garden: bool | None
     district: str | None
+    listed_at: str | None
 
 
 class GeminiError(RuntimeError):
     pass
 
 
+def _get_copilot_token() -> str:
+    """
+    Get the Copilot OAuth token via gh CLI.
+    Requires the 'copilot' scope: gh auth refresh -h github.com -s copilot
+    Cached per process run.
+    """
+    with _TOKEN_LOCK:
+        if "token" in _TOKEN_CACHE:
+            return _TOKEN_CACHE["token"]
+
+        try:
+            result = subprocess.run(
+                ["gh", "auth", "token"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=True,
+            )
+            oauth_token = result.stdout.strip()
+        except FileNotFoundError:
+            raise GeminiError(
+                "gh CLI nicht gefunden. Bitte installieren: https://cli.github.com"
+            )
+        except subprocess.CalledProcessError as exc:
+            raise GeminiError(
+                f"gh auth token fehlgeschlagen: {exc.stderr.strip()}"
+            ) from exc
+
+        if not oauth_token:
+            raise GeminiError(
+                "gh auth token gab kein Token zurueck. Bitte 'gh auth login' ausfuehren."
+            )
+
+        _TOKEN_CACHE["token"] = oauth_token
+        return oauth_token
+
+
 def evaluate_listing_with_gemini(
-    gemini_cmd: str,
+    copilot_model: str,
     site: str,
     listing_url: str,
     listing_text: str,
     line_callback: Callable[[str], None] | None = None,
     stop_event: threading.Event | None = None,
 ) -> GeminiResult:
+    if stop_event and stop_event.is_set():
+        raise GeminiError("Abgebrochen (Ctrl+C).")
+
     user_prompt = (
         f"Website: {site}\n"
         f"Listing-URL: {listing_url}\n\n"
@@ -71,21 +123,24 @@ def evaluate_listing_with_gemini(
         f"{listing_text[:12000]}"
     )
 
-    raw = _run_gemini(
-        gemini_cmd, SYSTEM_PROMPT_DE, user_prompt,
-        line_callback=line_callback, stop_event=stop_event,
-    )
+    raw = _call_copilot_api(copilot_model, SYSTEM_PROMPT_DE, user_prompt, stop_event)
+
+    if line_callback:
+        for line in raw.splitlines():
+            if line.strip():
+                line_callback(line)
+
     payload = _extract_json(raw)
 
     return GeminiResult(
         is_relevant=bool(payload.get("is_relevant", False)),
         title=str(payload.get("title", "(ohne Titel)")),
-        reason=str(payload.get("reason", "")),
         rent_eur=_to_float(payload.get("rent_eur")),
         rooms=_to_float(payload.get("rooms")),
         size_m2=_to_float(payload.get("size_m2")),
         has_balcony_or_garden=_to_bool_or_none(payload.get("has_balcony_or_garden")),
         district=_to_str_or_none(payload.get("district")),
+        listed_at=_to_str_or_none(payload.get("listed_at")),
     )
 
 
@@ -94,144 +149,98 @@ def to_listing(site: str, url: str, result: GeminiResult) -> Listing:
         title=result.title,
         url=url,
         source_site=site,
-        reason=result.reason,
         rent_eur=result.rent_eur,
         rooms=result.rooms,
         size_m2=result.size_m2,
         has_balcony_or_garden=result.has_balcony_or_garden,
         district=result.district,
+        listed_at=result.listed_at,
     )
 
 
-def _deliver_lines(text: str, callback: Callable[[str], None] | None) -> None:
-    if callback is None:
-        return
-    for line in text.splitlines():
-        if line.strip():
-            callback(line)
-
-
-class _Timeout(Exception):
-    """Internal: raised when the Gemini CLI exceeds its timeout."""
-
-
-def _popen_with_poll(
-    cmd: list[str],
-    stdin_text: str | None,
-    timeout: float,
-    stop_event: threading.Event | None,
-) -> str:
-    """
-    Run *cmd* and return its stdout.  Polls every 0.2 s so that both a
-    stop_event (Ctrl+C) and a timeout can kill the child process promptly.
-    Raises _Timeout on timeout, GeminiError on non-zero exit without output.
-    """
-    import os
-    import signal
-
-    proc = subprocess.Popen(
-        cmd,
-        stdin=subprocess.PIPE if stdin_text is not None else subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-
-    if stdin_text is not None:
-        try:
-            proc.stdin.write(stdin_text)  # type: ignore[union-attr]
-            proc.stdin.close()            # type: ignore[union-attr]
-        except BrokenPipeError:
-            pass
-
-    deadline = time.monotonic() + timeout
-    try:
-        while True:
-            # Check stop flag (Ctrl+C)
-            if stop_event is not None and stop_event.is_set():
-                proc.kill()
-                proc.wait()
-                raise GeminiError("Abgebrochen (Ctrl+C).")
-
-            # Check timeout
-            if time.monotonic() > deadline:
-                proc.kill()
-                proc.wait()
-                raise _Timeout()
-
-            rc = proc.poll()
-            if rc is not None:
-                stdout = (proc.stdout.read() if proc.stdout else "").strip()  # type: ignore
-                stderr = (proc.stderr.read() if proc.stderr else "").strip()  # type: ignore
-                if rc != 0 and not stdout:
-                    raise GeminiError(
-                        f"Gemini CLI Fehler (exit {rc}): {stderr[:500]}"
-                    )
-                return stdout
-
-            time.sleep(0.2)
-    except GeminiError:
-        raise
-    except _Timeout:
-        raise
-    except Exception as exc:
-        try:
-            proc.kill()
-        except Exception:
-            pass
-        raise GeminiError(f"Fehler beim Ausfuehren des Gemini CLI: {exc}") from exc
-
-
-def _run_gemini(
-    gemini_cmd: str,
+def _call_copilot_api(
+    model: str,
     system_prompt: str,
     user_prompt: str,
-    line_callback: Callable[[str], None] | None = None,
-    stop_event: threading.Event | None = None,
+    stop_event: threading.Event | None,
 ) -> str:
-    full_prompt = f"SYSTEM:\n{system_prompt}\n\nUSER:\n{user_prompt}"
+    token = _get_copilot_token()
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "Copilot-Integration-Id": "vscode-chat",
+        "Editor-Version": "vscode/1.95.0",
+    }
+    body = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "temperature": 0,
+    }
 
-    # Attempt 1: -p flag (used by @google/gemini-cli)
-    try:
-        output = _popen_with_poll(
-            [gemini_cmd, "-p", full_prompt],
-            stdin_text=None,
-            timeout=90,
-            stop_event=stop_event,
-        )
-        if output:
-            _deliver_lines(output, line_callback)
-            return output
-    except FileNotFoundError as exc:
-        raise GeminiError(
-            f"Gemini CLI nicht gefunden: '{gemini_cmd}'. Bitte Installation/Path pruefen."
-        ) from exc
-    except _Timeout:
-        pass  # fall through to stdin attempt
-    except GeminiError:
-        raise
+    max_retries = 4
+    backoff = 2.0  # seconds, doubled on each retry
 
-    # Attempt 2: stdin piping
-    try:
-        output = _popen_with_poll(
-            [gemini_cmd],
-            stdin_text=full_prompt,
-            timeout=90,
-            stop_event=stop_event,
-        )
-        if output:
-            _deliver_lines(output, line_callback)
-            return output
-    except _Timeout:
-        raise GeminiError(
-            "Gemini CLI Timeout (90s). Bitte API-Key und Netzwerkverbindung pruefen."
-        )
-    except GeminiError:
-        raise
-    except Exception as exc:
-        raise GeminiError(f"Gemini CLI Fehler: {exc}") from exc
+    for attempt in range(max_retries):
+        if stop_event and stop_event.is_set():
+            raise GeminiError("Abgebrochen (Ctrl+C).")
 
-    raise GeminiError("Gemini CLI lieferte keine verwertbare Ausgabe.")
+        # Enforce minimum interval between any two Copilot API calls globally
+        global _LAST_CALL_TIME
+        with _RATE_LOCK:
+            now = time.time()
+            wait_needed = _LAST_CALL_TIME + _MIN_CALL_INTERVAL - now
+            if wait_needed > 0:
+                time.sleep(wait_needed)
+            _LAST_CALL_TIME = time.time()
+
+        try:
+            resp = requests.post(
+                _COPILOT_API_URL,
+                headers=headers,
+                json=body,
+                timeout=90,
+            )
+        except requests.Timeout:
+            raise GeminiError("Copilot API Timeout (90s).")
+        except requests.RequestException as exc:
+            raise GeminiError(f"Copilot API Netzwerkfehler: {exc}") from exc
+
+        if stop_event and stop_event.is_set():
+            raise GeminiError("Abgebrochen (Ctrl+C).")
+
+        if resp.status_code == 401:
+            with _TOKEN_LOCK:
+                _TOKEN_CACHE.clear()
+                _TOKEN_EXPIRY.clear()
+            raise GeminiError(
+                "Copilot API: 401 Unauthorized. Bitte 'gh auth login' erneut ausfuehren."
+            )
+
+        if resp.status_code in (403, 429):
+            if attempt < max_retries - 1:
+                wait = (backoff * (2 ** attempt)) + random.uniform(0, 2)
+                time.sleep(wait)
+                continue
+            raise GeminiError(
+                f"Copilot API: {resp.status_code} nach {max_retries} Versuchen. "
+                "Kein aktives Copilot-Abonnement oder Rate-Limit erreicht."
+            )
+
+        if not resp.ok:
+            raise GeminiError(f"Copilot API Fehler {resp.status_code}: {resp.text[:300]}")
+
+        try:
+            data = resp.json()
+            return data["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, json.JSONDecodeError) as exc:
+            raise GeminiError(
+                f"Copilot API: unerwartetes Antwortformat: {resp.text[:300]}"
+            ) from exc
+
+    raise GeminiError("Copilot API: Maximale Wiederholungsversuche erreicht.")
 
 
 def _extract_json(raw: str) -> dict:
@@ -248,7 +257,7 @@ def _extract_json(raw: str) -> dict:
     if brace_match:
         return json.loads(brace_match.group(0))
 
-    raise GeminiError("Gemini-Antwort enthaelt kein parsebares JSON.")
+    raise GeminiError("Copilot-Antwort enthaelt kein parsebares JSON.")
 
 
 def _to_float(value) -> float | None:
