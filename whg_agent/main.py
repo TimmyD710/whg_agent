@@ -39,7 +39,8 @@ def _load_results_json(project_root: Path) -> list[Listing]:
     if not path.exists():
         raise FileNotFoundError(f"Keine gespeicherten Ergebnisse gefunden unter: {path}")
     raw = json.loads(path.read_text(encoding="utf-8"))
-    return [Listing(**entry) for entry in raw]
+    known_fields = {f.name for f in dataclasses.fields(Listing)}
+    return [Listing(**{k: v for k, v in entry.items() if k in known_fields}) for entry in raw]
 
 
 def _site_label(url: str) -> str:
@@ -390,11 +391,14 @@ def run() -> int:
             f"✔ Fertig. {len(all_relevant)} passende neue Listing(s)."
         )
     else:
-        send_result_email(config.mail, all_relevant, html_body=html_report, dry_run=dry_run)
-        print(
-            f"✔ Fertig. {len(all_relevant)} passende neue Listing(s). "
-            f"E-Mail gesendet an {config.mail.recipient}."
-        )
+        try:
+            send_result_email(config.mail, all_relevant, html_body=html_report, dry_run=dry_run)
+            print(
+                f"✔ Fertig. {len(all_relevant)} passende neue Listing(s). "
+                f"E-Mail gesendet an {config.mail.recipient}."
+            )
+        except Exception as mail_exc:
+            print(f"⚠️  E-Mail konnte nicht gesendet werden: {mail_exc}")
     return 0
 
 

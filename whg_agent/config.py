@@ -4,7 +4,6 @@ import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List
 
 from dotenv import load_dotenv
 
@@ -21,7 +20,7 @@ class MailConfig:
 
 @dataclass(frozen=True)
 class AppConfig:
-    sites: List[str]
+    sites: list[str]
     data_dir: Path
     seen_dir: Path
     copilot_model: str

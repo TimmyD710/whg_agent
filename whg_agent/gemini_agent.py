@@ -42,9 +42,7 @@ Gib NUR valides JSON zurueck (kein Markdown, keine Erklaerungen), exakt in diese
 """.strip()
 
 _COPILOT_API_URL = "https://api.githubcopilot.com/chat/completions"
-_COPILOT_TOKEN_URL = "https://api.github.com/copilot_internal/v2/token"
 _TOKEN_CACHE: dict[str, str] = {}
-_TOKEN_EXPIRY: dict[str, float] = {}
 _TOKEN_LOCK = threading.Lock()
 # Global rate limiter: enforces a minimum interval between any two API calls
 _RATE_LOCK = threading.Lock()

@@ -3,6 +3,7 @@ from __future__ import annotations
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from urllib.parse import urlparse
 
 from .config import MailConfig
 from .models import Listing
@@ -70,7 +71,7 @@ def _build_plain_body(listings: list[Listing]) -> str:
             [
                 f"{idx}. {listing.title}",
                 f"   URL: {listing.url}",
-                f"   Quelle: {listing.source_site}",
+                f"   Quelle: {urlparse(listing.source_site).netloc or listing.source_site}",
                 f"   Miete: {listing.rent_eur if listing.rent_eur is not None else 'unbekannt'} €",
                 f"   Zimmer: {listing.rooms if listing.rooms is not None else 'unbekannt'}",
                 f"   Fläche: {listing.size_m2 if listing.size_m2 is not None else 'unbekannt'} m²",
