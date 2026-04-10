@@ -293,6 +293,9 @@ def run() -> int:
 
     use_file_output = args.file is not None
     dry_run = args.dry_run or config.dry_run
+    # Only send an email when at least one matching listing was found.
+    # Set to False to always send (even when the result is empty).
+    only_email_if_findings = True
 
     # --render: skip agents, load last saved results
     if args.render:
@@ -309,10 +312,13 @@ def run() -> int:
         write_html_report(all_relevant, fallback_path, prebuilt_html=html_report)
         print(f"✔ HTML-Bericht gespeichert: {fallback_path}")
         if not use_file_output:
-            send_result_email(
-                config.mail, all_relevant, html_body=html_report, dry_run=dry_run
-            )
-            print(f"✔ E-Mail gesendet an {config.mail.recipient}.")
+            if only_email_if_findings and not all_relevant:
+                print("ℹ️  Keine neuen Treffer – keine E-Mail gesendet.")
+            else:
+                send_result_email(
+                    config.mail, all_relevant, html_body=html_report, dry_run=dry_run
+                )
+                print(f"✔ E-Mail gesendet an {config.mail.recipient}.")
         return 0
 
     # --tmux: each agent gets its own terminal pane
@@ -408,16 +414,19 @@ def run() -> int:
     if use_file_output:
         print(f"✔ Fertig. {len(all_relevant)} passende neue Listing(s).")
     else:
-        try:
-            send_result_email(
-                config.mail, all_relevant, html_body=html_report, dry_run=dry_run
-            )
-            print(
-                f"✔ Fertig. {len(all_relevant)} passende neue Listing(s). "
-                f"E-Mail gesendet an {config.mail.recipient}."
-            )
-        except Exception as mail_exc:
-            print(f"⚠️  E-Mail konnte nicht gesendet werden: {mail_exc}")
+        if only_email_if_findings and not all_relevant:
+            print("ℹ️  Keine neuen Treffer – keine E-Mail gesendet.")
+        else:
+            try:
+                send_result_email(
+                    config.mail, all_relevant, html_body=html_report, dry_run=dry_run
+                )
+                print(
+                    f"✔ Fertig. {len(all_relevant)} passende neue Listing(s). "
+                    f"E-Mail gesendet an {config.mail.recipient}."
+                )
+            except Exception as mail_exc:
+                print(f"⚠️  E-Mail konnte nicht gesendet werden: {mail_exc}")
     end_time = datetime.now()
     total_s = int((end_time - start_time).total_seconds())
     print(
