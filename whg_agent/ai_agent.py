@@ -25,8 +25,9 @@ Falls es eine einzelne Wohnungsanzeige ist, pruefe sie streng nach diesen Kriter
 - Nur Wohnungen in Innsbruck (wirklich nur Innsbruck, kein Umland).
 - 2 oder mehr Zimmer.
 - Miete unter 1300 Euro pro Monat.
-- Muss Balkon ODER Garten haben.
+- Muss Balkon, Terasse ODER Garten haben.
 - Mindestens 45 m2.
+Wird einer dieser Kriterien nicht eindeutig erfüllt, gebe is_relevant: false zurück.
 
 Gib NUR valides JSON zurueck (kein Markdown, keine Erklaerungen), exakt in diesem Schema:
 {
@@ -234,9 +235,7 @@ def _call_copilot_api(
             )
 
         if not resp.ok:
-            raise AiError(
-                f"Copilot API Fehler {resp.status_code}: {resp.text[:300]}"
-            )
+            raise AiError(f"Copilot API Fehler {resp.status_code}: {resp.text[:300]}")
 
         try:
             data = resp.json()
