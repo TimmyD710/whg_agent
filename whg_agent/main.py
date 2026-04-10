@@ -13,9 +13,9 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
+from .ai_agent import AiError, evaluate_listing, to_listing
 from .config import load_config
 from .emailer import send_result_email
-from .gemini_agent import GeminiError, evaluate_listing_with_gemini, to_listing
 from .models import AgentResult, Listing
 from .reporter import build_html_report, write_html_report
 from .scraper import WebFetchError, extract_listing_links, fetch_html, listing_page_text
@@ -106,7 +106,7 @@ def run_agent_for_site(
                 log.log(f"[{i}/{len(unseen_links)}] Lade Detailseite …")
                 detail_text = listing_page_text(link)
                 log.log(f"[{i}/{len(unseen_links)}] Frage Copilot …")
-                result = evaluate_listing_with_gemini(
+                result = evaluate_listing(
                     copilot_model=copilot_model,
                     site=site,
                     listing_url=link,
@@ -130,7 +130,7 @@ def run_agent_for_site(
                 if result.is_relevant:
                     relevant.append(to_listing(site=site, url=link, result=result))
 
-            except (WebFetchError, GeminiError) as listing_err:
+            except (WebFetchError, AiError) as listing_err:
                 processed_urls.append(link)
                 state.seen_urls.add(link)
                 log.warn(f"Listing übersprungen: {listing_err}")

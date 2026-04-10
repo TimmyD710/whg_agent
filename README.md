@@ -28,7 +28,7 @@ Multi-Agent-Wohnungssuche für Innsbruck mit paralleler Ausführung.
    - `pip install -r requirements.txt`
 2. `.env.example` nach `.env` kopieren und Werte eintragen.
 3. `sites.json` anpassen (variable Länge möglich).
-4. Sicherstellen, dass `gemini` CLI im PATH verfügbar ist.
+4. Sicherstellen, dass `gh` CLI im PATH verfügbar und eingeloggt ist (`gh auth login`).
 
 ## Start
 

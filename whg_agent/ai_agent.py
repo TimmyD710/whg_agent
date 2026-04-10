@@ -51,7 +51,7 @@ _MIN_CALL_INTERVAL: float = 2.0  # seconds
 
 
 @dataclass
-class GeminiResult:
+class AiResult:
     is_relevant: bool
     title: str
     rent_eur: float | None
@@ -62,7 +62,7 @@ class GeminiResult:
     listed_at: str | None
 
 
-class GeminiError(RuntimeError):
+class AiError(RuntimeError):
     pass
 
 
@@ -86,16 +86,16 @@ def _get_copilot_token() -> str:
             )
             oauth_token = result.stdout.strip()
         except FileNotFoundError:
-            raise GeminiError(
+            raise AiError(
                 "gh CLI nicht gefunden. Bitte installieren: https://cli.github.com"
             )
         except subprocess.CalledProcessError as exc:
-            raise GeminiError(
+            raise AiError(
                 f"gh auth token fehlgeschlagen: {exc.stderr.strip()}"
             ) from exc
 
         if not oauth_token:
-            raise GeminiError(
+            raise AiError(
                 "gh auth token gab kein Token zurueck. Bitte 'gh auth login' ausfuehren."
             )
 
@@ -103,7 +103,7 @@ def _get_copilot_token() -> str:
         return oauth_token
 
 
-def evaluate_listing_with_gemini(
+def evaluate_listing(
     copilot_model: str,
     site: str,
     listing_url: str,
@@ -111,9 +111,9 @@ def evaluate_listing_with_gemini(
     line_callback: Callable[[str], None] | None = None,
     warn_callback: Callable[[str], None] | None = None,
     stop_event: threading.Event | None = None,
-) -> GeminiResult:
+) -> AiResult:
     if stop_event and stop_event.is_set():
-        raise GeminiError("Abgebrochen (Ctrl+C).")
+        raise AiError("Abgebrochen (Ctrl+C).")
 
     user_prompt = (
         f"Website: {site}\n"
@@ -131,7 +131,7 @@ def evaluate_listing_with_gemini(
     if line_callback:
         line_callback(json.dumps(payload, ensure_ascii=False))
 
-    return GeminiResult(
+    return AiResult(
         is_relevant=bool(payload.get("is_relevant", False)),
         title=str(payload.get("title", "(ohne Titel)")),
         rent_eur=_to_float(payload.get("rent_eur")),
@@ -143,7 +143,7 @@ def evaluate_listing_with_gemini(
     )
 
 
-def to_listing(site: str, url: str, result: GeminiResult) -> Listing:
+def to_listing(site: str, url: str, result: AiResult) -> Listing:
     return Listing(
         title=result.title,
         url=url,
@@ -185,7 +185,7 @@ def _call_copilot_api(
 
     for attempt in range(max_retries):
         if stop_event and stop_event.is_set():
-            raise GeminiError("Abgebrochen (Ctrl+C).")
+            raise AiError("Abgebrochen (Ctrl+C).")
 
         # Enforce minimum interval between any two Copilot API calls globally
         global _LAST_CALL_TIME
@@ -204,17 +204,17 @@ def _call_copilot_api(
                 timeout=90,
             )
         except requests.Timeout:
-            raise GeminiError("Copilot API Timeout (90s).")
+            raise AiError("Copilot API Timeout (90s).")
         except requests.RequestException as exc:
-            raise GeminiError(f"Copilot API Netzwerkfehler: {exc}") from exc
+            raise AiError(f"Copilot API Netzwerkfehler: {exc}") from exc
 
         if stop_event and stop_event.is_set():
-            raise GeminiError("Abgebrochen (Ctrl+C).")
+            raise AiError("Abgebrochen (Ctrl+C).")
 
         if resp.status_code == 401:
             with _TOKEN_LOCK:
                 _TOKEN_CACHE.clear()
-            raise GeminiError(
+            raise AiError(
                 "Copilot API: 401 Unauthorized. Bitte 'gh auth login' erneut ausfuehren."
             )
 
@@ -228,13 +228,13 @@ def _call_copilot_api(
                     )
                 time.sleep(wait)
                 continue
-            raise GeminiError(
+            raise AiError(
                 f"Copilot API: {resp.status_code} nach {max_retries} Versuchen. "
                 "Kein aktives Copilot-Abonnement oder Rate-Limit erreicht."
             )
 
         if not resp.ok:
-            raise GeminiError(
+            raise AiError(
                 f"Copilot API Fehler {resp.status_code}: {resp.text[:300]}"
             )
 
@@ -242,11 +242,11 @@ def _call_copilot_api(
             data = resp.json()
             return data["choices"][0]["message"]["content"]
         except (KeyError, IndexError, json.JSONDecodeError) as exc:
-            raise GeminiError(
+            raise AiError(
                 f"Copilot API: unerwartetes Antwortformat: {resp.text[:300]}"
             ) from exc
 
-    raise GeminiError("Copilot API: Maximale Wiederholungsversuche erreicht.")
+    raise AiError("Copilot API: Maximale Wiederholungsversuche erreicht.")
 
 
 def _extract_json(raw: str) -> dict:
@@ -263,7 +263,7 @@ def _extract_json(raw: str) -> dict:
     if brace_match:
         return json.loads(brace_match.group(0))
 
-    raise GeminiError("Copilot-Antwort enthaelt kein parsebares JSON.")
+    raise AiError("Copilot-Antwort enthaelt kein parsebares JSON.")
 
 
 def _to_float(value) -> float | None:

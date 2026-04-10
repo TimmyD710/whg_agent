@@ -17,7 +17,7 @@ Dieses Python-Projekt durchsucht mehrere Wohnungs-Webseiten parallel nach neuen 
 - Bei Folgeläufen dürfen nur neue (unbekannte) Inserate geprüft werden.
 - Agenten müssen Detailseiten von Inseraten öffnen und auswerten.
 - Webseitenliste ist variabel lang und kommt aus `sites.json`.
-- LLM-Auswertung erfolgt über vorhandene Gemini CLI (`gemini`).
+- LLM-Auswertung erfolgt über GitHub Copilot API (`ai_agent.py`).
 
 ## Code-Stil
 - Verwende Python 3.11+ Typannotationen.
@@ -32,7 +32,7 @@ Dieses Python-Projekt durchsucht mehrere Wohnungs-Webseiten parallel nach neuen 
 ## Erwartete Dateien
 - `whg_agent/main.py`: Orchestrierung und Parallelisierung.
 - `whg_agent/scraper.py`: Übersicht + Detailseiten lesen.
-- `whg_agent/gemini_agent.py`: Prompting und JSON-Auswertung via Gemini CLI.
+- `whg_agent/ai_agent.py`: Prompting und JSON-Auswertung via Copilot API.
 - `whg_agent/storage.py`: Persistenz bereits gesehener Inserate.
 - `whg_agent/emailer.py`: SMTP-Versand.
 - `sites.json`: konfigurierbare Website-Liste.
