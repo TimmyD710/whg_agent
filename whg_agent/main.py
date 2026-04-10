@@ -37,10 +37,15 @@ def _save_results_json(listings: list[Listing], project_root: Path) -> Path:
 def _load_results_json(project_root: Path) -> list[Listing]:
     path = project_root / _RESULTS_JSON
     if not path.exists():
-        raise FileNotFoundError(f"Keine gespeicherten Ergebnisse gefunden unter: {path}")
+        raise FileNotFoundError(
+            f"Keine gespeicherten Ergebnisse gefunden unter: {path}"
+        )
     raw = json.loads(path.read_text(encoding="utf-8"))
     known_fields = {f.name for f in dataclasses.fields(Listing)}
-    return [Listing(**{k: v for k, v in entry.items() if k in known_fields}) for entry in raw]
+    return [
+        Listing(**{k: v for k, v in entry.items() if k in known_fields})
+        for entry in raw
+    ]
 
 
 def _site_label(url: str) -> str:
@@ -107,7 +112,12 @@ def run_agent_for_site(
                     listing_url=link,
                     listing_text=detail_text,
                     line_callback=lambda line, _i=i, _n=len(unseen_links): (
-                        log.log(f"[{_i}/{_n}]   copilot \u25b8 {line}") if line.strip() else None
+                        log.log(f"[{_i}/{_n}]   copilot \u25b8 {line}")
+                        if line.strip()
+                        else None
+                    ),
+                    warn_callback=lambda msg, _i=i, _n=len(unseen_links): log.warn(
+                        f"[{_i}/{_n}] {msg}"
                     ),
                     stop_event=stop_event,
                 )
@@ -196,7 +206,9 @@ def launch_tmux(sites: list[str], project_root: Path, extra_args: list[str]) -> 
     )
     for cmd in cmds[1:]:
         subprocess.run(["tmux", "split-window", "-t", f"{session}:0", "-h"], check=True)
-        subprocess.run(["tmux", "send-keys", "-t", f"{session}:0", cmd, "Enter"], check=True)
+        subprocess.run(
+            ["tmux", "send-keys", "-t", f"{session}:0", cmd, "Enter"], check=True
+        )
 
     subprocess.run(["tmux", "select-layout", "-t", f"{session}:0", "tiled"], check=True)
 
@@ -291,11 +303,15 @@ def run() -> int:
             return 1
         print(f"✔ {len(all_relevant)} Ergebnis(se) aus gespeicherter JSON geladen.")
         html_report = build_html_report(all_relevant, sites=config.sites)
-        fallback_path = project_root / (args.file if use_file_output else "output/results.html")
+        fallback_path = project_root / (
+            args.file if use_file_output else "output/results.html"
+        )
         write_html_report(all_relevant, fallback_path, prebuilt_html=html_report)
         print(f"✔ HTML-Bericht gespeichert: {fallback_path}")
         if not use_file_output:
-            send_result_email(config.mail, all_relevant, html_body=html_report, dry_run=dry_run)
+            send_result_email(
+                config.mail, all_relevant, html_body=html_report, dry_run=dry_run
+            )
             print(f"✔ E-Mail gesendet an {config.mail.recipient}.")
         return 0
 
@@ -316,6 +332,9 @@ def run() -> int:
             return 1
 
     # --site: run a single agent (called by each tmux pane)
+    start_time = datetime.now()
+    print(f"▶ Start: {start_time:%d.%m.%Y %H:%M:%S}")
+
     sites_to_run = [args.site] if args.site else config.sites
     all_relevant: list[Listing] = []
     stop_event = threading.Event()
@@ -380,25 +399,30 @@ def run() -> int:
         print(f"⚠️  JSON-Speicherung fehlgeschlagen: {exc}")
 
     # Always save the HTML file first, regardless of --email or --file
-    fallback_path = project_root / (args.file if use_file_output else "output/results.html")
-    write_html_report(all_relevant, fallback_path, prebuilt_html=html_report)
-    print(
-        f"\n✔ HTML-Bericht gespeichert: {fallback_path}"
+    fallback_path = project_root / (
+        args.file if use_file_output else "output/results.html"
     )
+    write_html_report(all_relevant, fallback_path, prebuilt_html=html_report)
+    print(f"\n✔ HTML-Bericht gespeichert: {fallback_path}")
 
     if use_file_output:
-        print(
-            f"✔ Fertig. {len(all_relevant)} passende neue Listing(s)."
-        )
+        print(f"✔ Fertig. {len(all_relevant)} passende neue Listing(s).")
     else:
         try:
-            send_result_email(config.mail, all_relevant, html_body=html_report, dry_run=dry_run)
+            send_result_email(
+                config.mail, all_relevant, html_body=html_report, dry_run=dry_run
+            )
             print(
                 f"✔ Fertig. {len(all_relevant)} passende neue Listing(s). "
                 f"E-Mail gesendet an {config.mail.recipient}."
             )
         except Exception as mail_exc:
             print(f"⚠️  E-Mail konnte nicht gesendet werden: {mail_exc}")
+    end_time = datetime.now()
+    total_s = int((end_time - start_time).total_seconds())
+    print(
+        f"◀ Ende:  {end_time:%d.%m.%Y %H:%M:%S} | Laufzeit: {total_s // 60} min {total_s % 60} s"
+    )
     return 0
 
 

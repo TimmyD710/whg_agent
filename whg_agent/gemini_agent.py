@@ -23,7 +23,7 @@ Pruefe den folgenden Seitentext. Falls es sich NICHT um eine einzelne Wohnungsan
 
 Falls es eine einzelne Wohnungsanzeige ist, pruefe sie streng nach diesen Kriterien:
 - Nur Wohnungen in Innsbruck (wirklich nur Innsbruck, kein Umland).
-- 2 oder 3 Zimmer.
+- 2 oder mehr Zimmer.
 - Miete unter 1300 Euro pro Monat.
 - Muss Balkon ODER Garten haben.
 - Mindestens 45 m2.
@@ -109,6 +109,7 @@ def evaluate_listing_with_gemini(
     listing_url: str,
     listing_text: str,
     line_callback: Callable[[str], None] | None = None,
+    warn_callback: Callable[[str], None] | None = None,
     stop_event: threading.Event | None = None,
 ) -> GeminiResult:
     if stop_event and stop_event.is_set():
@@ -121,14 +122,14 @@ def evaluate_listing_with_gemini(
         f"{listing_text[:12000]}"
     )
 
-    raw = _call_copilot_api(copilot_model, SYSTEM_PROMPT_DE, user_prompt, stop_event)
-
-    if line_callback:
-        for line in raw.splitlines():
-            if line.strip():
-                line_callback(line)
+    raw = _call_copilot_api(
+        copilot_model, SYSTEM_PROMPT_DE, user_prompt, stop_event, warn_callback
+    )
 
     payload = _extract_json(raw)
+
+    if line_callback:
+        line_callback(json.dumps(payload, ensure_ascii=False))
 
     return GeminiResult(
         is_relevant=bool(payload.get("is_relevant", False)),
@@ -161,6 +162,7 @@ def _call_copilot_api(
     system_prompt: str,
     user_prompt: str,
     stop_event: threading.Event | None,
+    warn_callback: Callable[[str], None] | None = None,
 ) -> str:
     token = _get_copilot_token()
     headers = {
@@ -178,8 +180,8 @@ def _call_copilot_api(
         "temperature": 0,
     }
 
-    max_retries = 4
-    backoff = 2.0  # seconds, doubled on each retry
+    max_retries = 10
+    backoff = 2  # seconds, doubled on each retry
 
     for attempt in range(max_retries):
         if stop_event and stop_event.is_set():
@@ -212,14 +214,18 @@ def _call_copilot_api(
         if resp.status_code == 401:
             with _TOKEN_LOCK:
                 _TOKEN_CACHE.clear()
-                _TOKEN_EXPIRY.clear()
             raise GeminiError(
                 "Copilot API: 401 Unauthorized. Bitte 'gh auth login' erneut ausfuehren."
             )
 
         if resp.status_code in (403, 429):
             if attempt < max_retries - 1:
-                wait = (backoff * (2 ** attempt)) + random.uniform(0, 2)
+                wait = (backoff * (2**attempt)) + random.uniform(0, 2)
+                if warn_callback:
+                    warn_callback(
+                        f"Retry {attempt + 1}/{max_retries} nach {resp.status_code} "
+                        f"– warte {wait:.1f}s …"
+                    )
                 time.sleep(wait)
                 continue
             raise GeminiError(
@@ -228,7 +234,9 @@ def _call_copilot_api(
             )
 
         if not resp.ok:
-            raise GeminiError(f"Copilot API Fehler {resp.status_code}: {resp.text[:300]}")
+            raise GeminiError(
+                f"Copilot API Fehler {resp.status_code}: {resp.text[:300]}"
+            )
 
         try:
             data = resp.json()
