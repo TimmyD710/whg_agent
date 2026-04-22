@@ -14,25 +14,21 @@ import requests
 from .models import Listing
 
 SYSTEM_PROMPT_DE = """
-Du bist ein Wohnungs-Scout-Agent fuer Innsbruck.
+Du bist ein Wohnungs-Daten-Extraktor.
 
 Aufgabe:
-Pruefe den folgenden Seitentext. Falls es sich NICHT um eine einzelne Wohnungsanzeige handelt
-(z. B. Kategorieseite, Uebersichtsseite, Fehlerseite, Login-Seite), antworte sofort mit:
-{"is_relevant": false, "title": "Keine Anzeige", "rent_eur": null, "rooms": null, "size_m2": null, "has_balcony_or_garden": null, "district": null, "listed_at": null}
+Lese den folgenden Seitentext und extrahiere die Eckdaten der Wohnungsanzeige.
 
-Falls es eine einzelne Wohnungsanzeige ist, pruefe sie streng nach diesen Kriterien:
-- Nur Wohnungen in Innsbruck (wirklich nur Innsbruck, kein Umland).
-- 2 oder mehr Zimmer.
-- Miete unter 1300 Euro pro Monat.
-- Muss Balkon, Terasse ODER Garten haben.
-- Mindestens 45 m2.
-Wird einer dieser Kriterien nicht eindeutig erfüllt, gebe is_relevant: false zurück.
+Falls es sich NICHT um eine einzelne Wohnungsanzeige handelt
+(z. B. Kategorie-/Uebersichtsseite, Fehlerseite, Login-Seite, Gesuchsanzeige von jemandem der eine Wohnung SUCHT),
+setze "is_listing": false und alle anderen Felder auf null.
+
+Falls es eine einzelne Wohnungsanzeige ist, setze "is_listing": true und extrahiere die Daten.
 
 Gib NUR valides JSON zurueck (kein Markdown, keine Erklaerungen), exakt in diesem Schema:
 {
-  "is_relevant": true/false,
-  "title": "...",
+  "is_listing": true/false,
+  "title": "..."|null,
   "rent_eur": number|null,
   "rooms": number|null,
   "size_m2": number|null,
@@ -40,6 +36,11 @@ Gib NUR valides JSON zurueck (kein Markdown, keine Erklaerungen), exakt in diese
   "district": "..."|null,
   "listed_at": "TT.MM.JJJJ HH:MM"|null
 }
+
+Hinweise:
+- "has_balcony_or_garden": true nur wenn explizit Balkon, Terrasse oder Garten erwaehnt wird, sonst false oder null.
+- "rent_eur": Gesamtmiete/Warmmiete in Euro pro Monat als Zahl.
+- "district": Stadt oder Stadtteil, z. B. "Innsbruck" oder "Pradl".
 """.strip()
 
 _COPILOT_API_URL = "https://api.githubcopilot.com/chat/completions"
@@ -53,8 +54,8 @@ _MIN_CALL_INTERVAL: float = 2.0  # seconds
 
 @dataclass
 class AiResult:
-    is_relevant: bool
-    title: str
+    is_listing: bool
+    title: str | None
     rent_eur: float | None
     rooms: float | None
     size_m2: float | None
@@ -119,7 +120,7 @@ def evaluate_listing(
     user_prompt = (
         f"Website: {site}\n"
         f"Listing-URL: {listing_url}\n\n"
-        "Pruefe diese Seite nach den Kriterien und liefere das JSON:\n\n"
+        "Extrahiere die Wohnungsdaten aus diesem Seitentext:\n\n"
         f"{listing_text[:12000]}"
     )
 
@@ -133,8 +134,8 @@ def evaluate_listing(
         line_callback(json.dumps(payload, ensure_ascii=False))
 
     return AiResult(
-        is_relevant=bool(payload.get("is_relevant", False)),
-        title=str(payload.get("title", "(ohne Titel)")),
+        is_listing=bool(payload.get("is_listing", False)),
+        title=_to_str_or_none(payload.get("title")),
         rent_eur=_to_float(payload.get("rent_eur")),
         rooms=_to_float(payload.get("rooms")),
         size_m2=_to_float(payload.get("size_m2")),
@@ -146,7 +147,7 @@ def evaluate_listing(
 
 def to_listing(site: str, url: str, result: AiResult) -> Listing:
     return Listing(
-        title=result.title,
+        title=result.title or "(ohne Titel)",
         url=url,
         source_site=site,
         rent_eur=result.rent_eur,

@@ -13,7 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
-from .ai_agent import AiError, evaluate_listing, to_listing
+from .ai_agent import AiError, AiResult, evaluate_listing, to_listing
 from .config import load_config
 from .emailer import send_result_email
 from .models import AgentResult, Listing
@@ -24,6 +24,28 @@ from .storage import load_seen_state, save_seen_state, state_file_for_site
 _RESULTS_JSON = "output/results.json"
 
 _PRINT_LOCK = threading.Lock()
+
+# ---------------------------------------------------------------------------
+# Relevance criteria – applied in code, not by the LLM
+# ---------------------------------------------------------------------------
+_MAX_RENT_EUR: float = 1300.0
+_MIN_ROOMS: float = 2.0
+_MIN_SIZE_M2: float = 45.0
+
+
+def _is_relevant(result: AiResult) -> bool:
+    """Return True iff extracted listing data meets all rental criteria."""
+    if not result.is_listing:
+        return False
+    if result.rent_eur is None or result.rent_eur >= _MAX_RENT_EUR:
+        return False
+    if result.rooms is None or result.rooms < _MIN_ROOMS:
+        return False
+    if result.size_m2 is None or result.size_m2 < _MIN_SIZE_M2:
+        return False
+    if not result.has_balcony_or_garden:  # None or False → reject
+        return False
+    return True
 
 
 def _save_results_json(listings: list[Listing], project_root: Path) -> Path:
@@ -101,11 +123,11 @@ def run_agent_for_site(
             if stop_event and stop_event.is_set():
                 log.log("Abgebrochen.")
                 break
-            log.log(f"[{i}/{len(unseen_links)}] → {link}")
+            # log.log(f"[{i}/{len(unseen_links)}] → {link}")
             try:
-                log.log(f"[{i}/{len(unseen_links)}] Lade Detailseite …")
+                # log.log(f"[{i}/{len(unseen_links)}] Lade Detailseite …")
                 detail_text = listing_page_text(link)
-                log.log(f"[{i}/{len(unseen_links)}] Frage Copilot …")
+                # log.log(f"[{i}/{len(unseen_links)}] Frage Copilot …")
                 result = evaluate_listing(
                     copilot_model=copilot_model,
                     site=site,
@@ -124,10 +146,11 @@ def run_agent_for_site(
 
                 processed_urls.append(link)
                 state.seen_urls.add(link)
-
-                verdict = "✅ PASSEND" if result.is_relevant else "❌ nicht passend"
-                log.log(f"[{i}/{len(unseen_links)}] {verdict}: {result.title}")
-                if result.is_relevant:
+                log.log(f"[{i}/{len(unseen_links)}] → {link}")
+                relevant_flag = _is_relevant(result)
+                verdict = "✅ PASSEND" if relevant_flag else "❌ nicht passend"
+                log.log(f"[{i}/{len(unseen_links)}] {verdict}: {result.title or '(kein Titel)'}")
+                if relevant_flag:
                     relevant.append(to_listing(site=site, url=link, result=result))
 
             except (WebFetchError, AiError) as listing_err:

@@ -79,7 +79,7 @@ def listing_page_text(url: str) -> str:
     html = fetch_html(url)
     soup = BeautifulSoup(html, "html.parser")
 
-    for node in soup(["script", "style", "noscript"]):
+    for node in soup(["script", "style", "noscript", "nav", "header", "footer", "aside", "form"]):
         node.extract()
 
     text = soup.get_text("\n", strip=True)
