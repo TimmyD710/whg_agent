@@ -222,7 +222,7 @@ def _call_copilot_api(
 
         if resp.status_code in (403, 429):
             if attempt < max_retries - 1:
-                wait = (backoff * (2**attempt)) + random.uniform(0, 2)
+                wait = min(backoff * (2**attempt), 30) + random.uniform(0, 2)
                 if warn_callback:
                     warn_callback(
                         f"Retry {attempt + 1}/{max_retries} nach {resp.status_code} "
